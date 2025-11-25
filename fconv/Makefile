@@ -1,77 +1,63 @@
-#
-#
-#  This source file is part of ELINA (ETH LIbrary for Numerical Analysis).
-#  ELINA is Copyright © 2021 Department of Computer Science, ETH Zurich
-#  This software is distributed under GNU Lesser General Public License Version 3.0.
-#  For more information, see the ELINA project website at:
-#  http://elina.ethz.ch
-#
-#  THE SOFTWARE IS PROVIDED "AS-IS" WITHOUT ANY WARRANTY OF ANY KIND, EITHER
-#  EXPRESS, IMPLIED OR STATUTORY, INCLUDING BUT NOT LIMITED TO ANY WARRANTY
-#  THAT THE SOFTWARE WILL CONFORM TO SPECIFICATIONS OR BE ERROR-FREE AND ANY
-#  IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE,
-#  TITLE, OR NON-INFRINGEMENT.  IN NO EVENT SHALL ETH ZURICH BE LIABLE FOR ANY
-#  DAMAGES, INCLUDING BUT NOT LIMITED TO DIRECT, INDIRECT,
-#  SPECIAL OR CONSEQUENTIAL DAMAGES, ARISING OUT OF, RESULTING FROM, OR IN
-#  ANY WAY CONNECTED WITH THIS SOFTWARE (WHETHER OR NOT BASED UPON WARRANTY,
-#  CONTRACT, TORT OR OTHERWISE).
-#
-#
-
 include ../Makefile.config
 
-LIBDIR = $(ELINA_PREFIX)/lib
-INCLDIR = $(ELINA_PREFIX)/include
+PREFIX = /usr/local
+HOMEBREW_PREFIX = /opt/homebrew
 
-INSTALL = install
-INSTALLd = install -d
+FCONV_INCLUDE_FILES = fconv.h utils.h fp_mat.h mpq.h dynamic_bitset.h octahedron.h asrt.h S_curve.h S_curve2.h pdd.h split_in_quadrants.h sparse_cover.h octahedron_resources.h relaxation.h decomposition.h quadrants.h
+FCONV_C_FILES = fconv.cpp utils.cpp fp_mat.cpp mpq.cpp dynamic_bitset.cpp octahedron.cpp S_curve.cpp S_curve2.cpp pdd.cpp split_in_quadrants.cpp sparse_cover.cpp relaxation.cpp decomposition.cpp quadrants.cpp
+FCONV_OBJS = $(subst .cpp,.o,$(FCONV_C_FILES))
 
-OBJS = fconv.o relaxation.o decomposition.o split_in_quadrants.o octahedron.o quadrants.o pdd.o sparse_cover.o mpq.o utils.o dynamic_bitset.o fp_mat.o S_curve.o S_curve2.o
+# OS
+UNAME_S := $(shell uname -s)
 
-LIBS = $(GMP_LIB_FLAG) -lgmp $(CDD_LIB_FLAG) -lcddgmp
-INCLUDES = $(GMP_INCLUDE_FLAG)
+CXXFLAGS += -std=c++14 -O3 -march=native -fPIC -Wall -Wextra -DGMPRATIONAL
+CXXFLAGS += -I$(HOMEBREW_PREFIX)/include -I$(HOMEBREW_PREFIX)/include/cdd
 
-INCLUDES += $(CDD_INCLUDE_FLAG)
-
-ifneq ($(BOOST_PREFIX),)
-	INCLUDES += -I$(BOOST_PREFIX)
+ifeq ($(UNAME_S),Darwin)
+    # macOS Specifics
+    SDKROOT := $(shell xcrun --show-sdk-path)
+    SHARED_LIB = libfconv.dylib
+    
+    # We create the dylib, but we MUST create a .so symlink for Python later
+    SHARED_FLAGS = -dynamiclib -install_name $(PREFIX)/lib/$(SHARED_LIB)
+    
+    # Linker locations
+    LDFLAGS += -L/usr/local/lib -L$(HOMEBREW_PREFIX)/lib
+    
+    # SDK and Stdlib linkage
+    CXXFLAGS += -stdlib=libc++ -isysroot $(SDKROOT) -I$(SDKROOT)/usr/include/c++/v1
+    LDFLAGS += -stdlib=libc++ -isysroot $(SDKROOT)
+else
+    SHARED_LIB = libfconv.so
+    SHARED_FLAGS = -shared -fPIC
 endif
 
-SOINST = libfconv.so
-FCONVH = fconv.h
+LIBS = -lgmp -lmpfr -lcdd
+all: $(SHARED_LIB) libfconv.so
 
-CXXFLAGS := -std=c++14 -Wall -Wextra -Wpedantic -flto -mfma -mavx2 -DGMPRATIONAL -fPIC
-ifeq ($(DEBUG),)
-	CXXFLAGS := $(CXXFLAGS) -DNDEBUG -O3 -march=native
+$(SHARED_LIB): $(FCONV_OBJS)
+	$(CXX) $(SHARED_FLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
+
+# Create a .so symlink so Python can find it (macOS only)
+libfconv.so: $(SHARED_LIB)
+ifeq ($(UNAME_S),Darwin)
+	ln -sf $(SHARED_LIB) libfconv.so
 endif
 
-all: libfconv.so tests
-
-$(SOINST): $(OBJS)
-	$(CXX) -shared $(CC_ELINA_DYLIB) $(CXXFLAGS) $(INCLUDES) -o $(SOINST) $(OBJS) $(LIBS)
-
-tests: tests.cpp $(OBJS)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $^ $(LIBS)
-
-%.o: %.cpp
-	$(CXX) $(CXXFLAGS) $(CDDFLAGS) $(CPPFLAGS) $(INCLUDES) -c $< -o $@
+%.o: %.cpp $(FCONV_INCLUDE_FILES)
+	$(CXX) -c $(CXXFLAGS) -o $@ $<
 
 install:
-	$(INSTALLd) $(LIBDIR); \
-	for i in $(SOINST); do \
-		$(INSTALL) $$i $(LIBDIR); \
-	done;
-
-	$(INSTALLd) $(INCLDIR); \
-	for i in $(FCONVH); do \
-		$(INSTALL) $$i $(INCLDIR); \
-	done;
+	mkdir -p $(PREFIX)/include/fconv
+	mkdir -p $(PREFIX)/lib
+	cp $(FCONV_INCLUDE_FILES) $(PREFIX)/include/fconv
+	cp $(SHARED_LIB) $(PREFIX)/lib
+ifeq ($(UNAME_S),Darwin)
+	# Install the symlink too
+	ln -sf $(PREFIX)/lib/$(SHARED_LIB) $(PREFIX)/lib/libfconv.so
+endif
 
 clean:
-	-rm *.o
-	-rm *.so
-	-rm tests
+	rm -f *.o $(SHARED_LIB) libfconv.so libfconv.dylib
 
-.PHONY: test
-test: tests
-	./tests
+.PHONY: all install clean
